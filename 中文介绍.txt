@@ -1,0 +1,232 @@
+https://mp.weixin.qq.com/s/ZzCQ9UgUhIwfDGO9QTwuFg
+---------------------------
+
+
+介绍一种更方便的代理池实现方案
+
+
+现在搞爬虫，代理是不可或缺的资源。
+
+代理池
+为了保证代理的有效性，我们往往可能需要维护一个代理池。这个代理池里面存着非常多的代理，同时代理池还会定时爬取代理来补充到代理池中，同时还会不断检测其中代理的有效性。当然还有一个很重要的功能就是提供一个接口，这个接口可以随机返回代理池中的一个有效代理。
+
+比如之前我实现过的一个代理池：https://github.com/Python3WebSpider/ProxyPool，就包含了上面所说的功能，它把现在很多免费代理、付费代理集成起来，做到定时获取，定时检测，同时还提供了代理提取的 API。
+
+用的时候怎么用呢？直接请求某个接口，获取一个随机代理即可。比如代理池的取用地址为 http://127.0.0.1:5555/random，那么我们直接请求这个接口就能获取一个有效代理，像这样：
+
+import requests
+
+proxypool_url = 'http://127.0.0.1:5555/random'
+
+def get_random_proxy():
+    return requests.get(proxypool_url).text.strip()
+在这里我们直接调用 get_random_proxy 方法我们就能获取到一个可用代理。
+
+返回结果类似如下：
+
+116.196.115.209:8080
+然后我们再拿着这个代理去请求某些站点就行了。
+
+情景切入
+其实这样做起来问题不大，用起来也不麻烦。但是我们必须要请求这个 API 来获取一个代理，然后接着再去拿着这个代理去爬取站点。有没有更优化的方案呢？能不能我把代理都封装成一个 endpoint，我直接拿着这个 endpoint 来爬呢？
+
+有的同学一听，说：哦，这种代理我用过啊，那个 xx 云不就这么干的吗？它会给我一个代理地址，比如 xxproxy:7777，我就设置这个代理地址，然后只拿着这个代理去爬就行了，每次请求的时候 IP 都会换，具体用的那个 IP 我也不需要关心，还挺方便的。
+
+是的就是这种，有些代理服务商就会卖这种服务的代理，叫做隧道代理（动态转发），在这里把某代理网的介绍复制过来。
+
+•隧道代理无须切换 IP，将 IP 切换的事情交给隧道来做，程序只需要对接一个隧道代理的固定地址即可。
+•隧道代理（动态转发）每一个请求一个随机 IP。随机 IP 来自全局 IP 池，每天 IP 流水 50 万以上。
+•HTTP 隧道有并发请求限制，默认每秒只允许 5 个请求。如果需要更多请求数，请额外购买。
+原理基本上就是这样子，调用的时候就直接设置上这个代理就好了，比如 Scrapy 的话就是这样调用：
+
+import scrapy
+import os
+
+class MyIPSpider(scrapy.Spider):
+  name = 'my_ip'
+
+  start_urls = [
+    'https://api.ip.sb/ip?v=1',
+    'https://api.ip.sb/ip?v=2',
+  ]
+
+  def start_requests(self):
+    proxyUser = "app_id(后台-产品管理-隧道代理页面可查)"
+    proxyPass = "密码（用户中心-隧道代理订单页面可查）"
+    proxyHost = "http.xxxxxproxy.com"
+    proxyPort = "1000"
+
+    proxyMeta = "http://%(user)s:%(pass)s@%(host)s:%(port)s" % {
+      "host": proxyHost,
+      "port": proxyPort,
+      "user": proxyUser,
+      "pass": proxyPass,
+    }
+
+    for url in self.start_urls:
+      req = scrapy.Request(url, meta={'proxy': proxyMeta})
+      yield req
+
+
+      def parse(self, response):
+        yield {
+          'body': response.text,
+        }
+那么它具体原理是什么样子的呢？在这里再贴一段官方的介绍。
+
+产品特性
+•隧道代理（短效版）每个 IP 的使用时长为 1 分钟，到期后隧道将自动切换到另一个 IP。同时也允许手动切换 IP，切换间隔时间不得少于 10 秒。
+•隧道代理有并发请求限制，默认每秒只允许 5 个请求。如果需要更多请求数，请额外购买。
+产品说明
+•隧道代理 基于 HTTP 协议，支持 HTTP/HTTPS 协议的数据接入。
+•  平台在云端维护一个全局 IP 池 供短效代理 IP 产品使用，池中的 IP 会不间断更新，以保证 IP 池 中有足够多的 IP 供用户使用。
+•需要注意的是 IP池 中有部分 IP 可能会在当天重复出现。
+•隧道代理（短效版） 同一时刻只能使用一个 IP，如果需要同时使用多个 IP，同一账号需要购买多条 HTTP 隧道。
+
+资源优势
+•自有数据节点，网络稳定，速度快。
+•百万级别 IP 池，海量 IP 可用。
+•毫秒级别更换 IP，响应迅速。
+•无须频繁更换代理服务器地址和端口号，方便快捷。
+
+基本上看完介绍就是这样子，用的话就是设置一个固定代理，然后它背后有一个代理池，帮你去做转发。也就是说它把代理池的筛选、挑选、转发的功能都做了，这样用户用起来会更加方便。
+
+但这种隧道代理也不是没有缺点，比如：
+
+•  不好针对性地控制针对某一站点的有效代理。比如这个隧道代理它只管给你分配一个有效能用的代理，但是它不管这个代理是不是已经被某个网站封掉了。这个问题使用代理池就能很好地解决。
+•  这种代理一般他们会设置并发限制，比如限制每秒最多五个，多了继续加钱。
+
+这种代理大家可能比较好奇是怎么实现的，其实很简单，本节我们就来介绍下它的实现方式。
+
+Squid
+首先我们来介绍下 Squid，如果你自己搭建过代理的话，想必对 Squid 不陌生。它就是一个用来搭建 HTTP 代理的软件。
+
+官方介绍如下：
+
+Squid is a caching proxy for the Web supporting HTTP, HTTPS, FTP, and more. It reduces bandwidth and improves response times by caching and reusing frequently-requested web pages. Squid has extensive access controls and makes a great server accelerator. It runs on most available operating systems, including Windows and is licensed under the GNU GPL.
+官方介绍说是一个代理缓存软件，为什么又说是缓存呢？这里先引用一张图，其工作机制是这样的：
+
+null
+Squid工作机制
+当我们客户机通过 Squid 代理去访问 Web页面时，指定的代理服务器会先检查自己的缓存，若是缓存中有我们客户机需要的页面，那么 Squid 服务器将直接把缓存中的页面内容返回给客户机，如果缓存中没有客户端请求的页面，那么 Squid 代理服务器就会向 Internet 发送访问请求，获得返回的 Web 页面后，将网页的数据保存到缓存中并发送给客户机。
+
+由于客户机的 Web 访问请求实际上是 Squid 代理服务器来代替完成的，所以隐藏了用户的真实 IP 地址，从而起到一定的保护作用。另一方面，Squid 也可以针对要访问的目标、客户机的地址、访问的时间段进行过滤控制。
+
+这就明白了吧，为什么说是代理缓存软件，以及它为什么能搭建一个代理服务器。
+
+当然 Squid 里面可以设置透明代理、匿名代理、高匿代理等方式，都是可以配置的。当然对于爬虫来说，选择匿名或高匿代理是最好的。
+
+代理设置
+好了，明白了 Squid 的工作机制之后，我们其实就可以借助于 Squid 来搭建一个代理服务器了。比如你的公网 IP 为 x.x.x.x，然后安装了一个 Squid，运行在 3128 端口，运行起来。
+
+然后你就可以使用 x.x.x.x:3128 作为你的爬虫代理了，你就拥有了一个像之前代理池中取到的某个代理一样工作原理的代理。
+
+当你用这个代理来爬取网站的时候，如果你设置的是高匿模式，那么被爬取的网站识别到的 IP 就是这个服务器的 IP，即 x.x.x.x，就伪装成功了。
+
+嗯，这就是 Squid 的基本使用。
+
+但是，仿佛扯远了，我们要说的不是这个，说的是怎样来实现一个前文所介绍的隧道代理。
+
+隧道代理
+隧道代理的介绍前文介绍过了，那么我们要怎么实现呢？其实用 Squid 就可以了。
+
+Squid 里面有一个配置叫做 cache_peer，翻译过来叫「缓存同胞」？很奇怪的名字是吧？其实你了解了 Squid 的原理之后就不觉得奇怪了，前文说了，Squid 本身就是一个代理缓存，即 cache，而 peer 又是同类、同胞的意思。怎么理解呢，其实就是和自己类似的 Squid 服务器嘛。
+
+那么 cache_peer 能配置什么呢？其实就是在这里面再配置一些类似 Squid 的代理，即 Squid 代理的代理。
+
+其基本语法配置如下：
+
+cache_peer hostname type http-port icp-port [options]
+例如：
+
+#                                        proxy  icp
+#          hostname             type     port   port  options
+#          -------------------- -------- ----- -----  -----------
+cache_peer parent.foo.net       parent    3128  3130  default
+cache_peer sib1.foo.net         sibling   3128  3130  proxy-only
+cache_peer sib2.foo.net         sibling   3128  3130  proxy-only
+cache_peer example.com          parent    80       0  default
+cache_peer cdn.example.com      sibling   3128     0  
+比如这里就配置了 5 个 cache_peer，指定了 hostname，type，port 等等。
+
+这样代理就会根据对应的配置选择特定的代理进行转发了。
+
+比如这里配置了一个 default 的 cache_peer 为 parent.foo.net 的代理，那么一旦有请求本 Squid 代理服务器的，本 Squid 服务器就会把请求再转发给 parent.foo.net 这个代理服务器，parent.foo.net 这个代理服务器再去请求对应的网站就行了，得到响应之后再按照顺序转发回去就行了。
+
+这就是代理的转发，也可以理解为其中包含了两级代理，第一级代理就是这个 Squid，第二级代理就是随机选取的 cache_peer。
+
+好，那么回到原来的问题，隧道代理就有思路了吧。
+
+我们可以把获取下来的好多好多代理都设置成 cache_peer，Squid 会根据规则自动或随机选择某一代理进行请求，同时 Squid 还能同时检测每个 cache_peer 的有效性。比如我们有一万个代理 IP，我们写入到 cache_peer 里面，Squid 就会自动检测每个代理的有效性，我们也不用再去实现检测逻辑了。
+
+然后如有请求来了，Squid 就会随机选一个 cache_peer 来转发，这样被爬取的网站获取的 IP 就是二级代理的 IP。
+
+同时我们这个 Squid 的代理也不会变，就是 Squid 代理所在的服务器地址和端口。
+
+这样我们就能实现一个恒定的隧道代理，同时做到请求的时候代理地址随机动态更换了。
+
+嗯，美滋滋。
+
+配置实现
+那么具体配置是怎样的呢？
+
+这里介绍几个比较有用的参数：
+
+•hostname：就是二级代理服务器的 host，不带端口。
+•type：类型，可以是 pareent、sibling、multicast，我们设置为 parent 就好了。
+•port：二级代理服务器的端口。
+•icp port：用于查询有关对象的邻居缓存，如果对等方不支持 ICP 或 HTCP，则设置为 0，我们设置为 0 就好。
+•options：其他选项。在这里其他选项也有很多配置，比较重要的有：
+•login=user:password：如果二级代理有用户名密码，可以用 login 设置。
+•weight=N：cache_peer 选取权重，根据 weight 来有权重地选取 cache_peer。
+•no-query：不做查询操作，直接获取数据。
+•proxy-only：指明从 peer 得到的数据不在本地缓存。
+•default：缺省路由，该 peer 将被用作最后的尝试手段。当你只有一个父代理服务器并且其不支持 ICP 协议时，可以使用 default 和 no-query 选项让所有请求都发送到该父代理服务器。
+•round-robin：负载均衡，设置了之后会在配置的二级代理之间进行切换选取。
+•weighted-round-robin：有权重的负载均衡，同时会根据二级代理的往返时间来改变选取权重，越快的选取概率越高。
+
+这些是我从官方文档翻译的，更详细的配置大家可以去看官方文档：http://www.squid-cache.org/Doc/config/cache_peer/，里面还介绍了其他更多参数。
+
+好了，了解了上面的配置，我们的 cache_peer 应该怎么配置呢？
+
+这里给一个示例：
+
+cache_peer 58.22.22.124 parent 2053 0 no-query proxy-only weighted-round-robin login=germey:Yuy3z92hwRmJe2X6fs3BH6aWnt7xePoL
+这就是一行 cache_peer 的配置。
+
+如果有非常多的代理池，那么可以根据这个格式来写入一个 conf 文件里面，一个代理一个，Squid 引用这个文件即可。
+
+这个 conf 文件可以保存为 peers.conf，然后在 Squid 的配置文件 squid.conf 里面引入即可，例如：
+
+include /etc/squid/peers.conf
+这样，Squid 的 cache peers 会被设置为有权重的负载均衡模式，当有请求来的时候，Squid 会随机选一个 cache peer 转发，同时 Squid 还会检测每一个 cache peer 的有效性，我们也不用再单独实现检测逻辑了，省去了一大麻烦。
+
+嗯，利用上面的方法，我就能维护一个隧道代理了，这样一来，我就可以完成：
+
+•爬虫的代理直接设置为该 Squid 的 host 和 port 即可。
+•获取到的代理直接写入 peers.conf 配置文件里面，不用再去额外检测代理有效性，Squid 会自动检测。
+•代理池的维护和取用和转发由 Squid 的 cache_peer 机制自动实现，我们不用再去关心随机选取的问题了。
+
+OK，是不是很方便呢？这样我们就实现了一种更方便的代理池。
+
+高匿代理
+最后再介绍下 Squid 高匿代理的关键配置：
+
+request_header_access Via deny all
+request_header_access X-Forwarded-For deny all
+这里就仅做记录了，加到 squid.conf 配置文件即可。
+
+优化方案
+另外，有人说了，难道我有几万个 IP，每次更新都要写入 Squid 文件吗？写入之后要重启吧，Squid 重启的时候这个代理不就没法用了吗？
+
+这个问题，一个更好的解决方案是二级代理使用 ADSL 拨号代理服务器，peers.conf 里面配置这些 ADSL 拨号代理，这样 IP 的切换由 ADSL 拨号代理控制，本机 Squid 不用再动 peers.conf 配置文件，也不用重启了，同时还能检测拨号代理的有效性，实现永久可用。
+
+代码
+在这里提供我实现的隧道代理的源码，里面还支持了代理认证的配置，打包了 Docker，感兴趣可以研究一下：https://github.com/Python3WebSpider/ProxyTunnel，谢谢！
+
+参考来源
+•http://www.squid-cache.org/
+•http://www.squid-cache.org/Doc/config/cache_peer/
+•https://blog.51cto.com/riverxyz/1843194
+•https://blog.51cto.com/14154700/2406060?source=dra
+•https://xiaoxiangdaili.com/plan/tunnel/dynamic
